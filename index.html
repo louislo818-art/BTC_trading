@@ -451,6 +451,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
     <div class="btn-row" style="margin-top:12px;">
       <button class="btn btn-info" onclick="testTG()">測試發送</button>
       <button class="btn btn-ok" id="auto-btn" onclick="toggleAuto()">自動通知：開啟</button>
+      <button class="btn btn-sm" onclick="clearTgConfig()" style="font-size:11px;color:#555;border-color:#333;">清除已儲存</button>
     </div>
     <div class="auto-row">
       <span class="pulse" id="auto-dot"></span>
@@ -1547,6 +1548,45 @@ function resetJumpBase() {
 }
 
 loadState();                                // 從 localStorage 恢復狀態
+
+// ── Telegram 設定自動儲存 / 讀取 ────────────────────────
+const TG_LS = 'btc_tg_cfg';
+
+function saveTgConfig() {
+  const token  = document.getElementById('tg-token').value.trim();
+  const chatId = document.getElementById('tg-chatid').value.trim();
+  if (token && chatId) {
+    localStorage.setItem(TG_LS, JSON.stringify({ token, chatId }));
+  }
+}
+
+function clearTgConfig() {
+  localStorage.removeItem(TG_LS);
+  document.getElementById('tg-token').value  = '';
+  document.getElementById('tg-chatid').value = '';
+  addLog('Telegram 設定已清除');
+  const st = document.getElementById('tg-status');
+  st.textContent = '已清除儲存的設定'; st.className = 'status';
+}
+
+function loadTgConfig() {
+  try {
+    const cfg = JSON.parse(localStorage.getItem(TG_LS) || '{}');
+    if (cfg.token)  { document.getElementById('tg-token').value  = cfg.token;  }
+    if (cfg.chatId) { document.getElementById('tg-chatid').value = cfg.chatId; }
+    if (cfg.token && cfg.chatId) addLog('✅ Telegram 設定已從本機讀取');
+  } catch(e) {}
+}
+
+// 輸入框失去焦點時自動儲存
+document.getElementById('tg-token').addEventListener('blur',  saveTgConfig);
+document.getElementById('tg-chatid').addEventListener('blur', saveTgConfig);
+// 輸入框內容改變時也儲存（貼上情況）
+document.getElementById('tg-token').addEventListener('change',  saveTgConfig);
+document.getElementById('tg-chatid').addEventListener('change', saveTgConfig);
+
+loadTgConfig();  // 啟動時立即讀取
+
 fetchTicker();                              // 立即取得即時價格
 fetchKlines();                              // 載入1分鐘K線
 fetch15mKlines();                           // 載入15分鐘大趨勢
