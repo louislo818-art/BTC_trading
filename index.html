@@ -279,7 +279,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
   <div class="hdr">
     <div>
       <div class="ttl">BTC Day Trading 分析儀</div>
-      <div class="sub">本金 USD 3,000 · 1m K線(200根) + Wilder RSI + EMA Warm-up + 15m過濾</div>
+      <div class="sub">本金 USD 3,000 · OKX 1m K線(200根) + Wilder RSI + EMA Warm-up + 15m過濾</div>
     </div>
     <div style="text-align:right">
       <div class="price-big" id="btc-price">載入中...</div>
@@ -529,7 +529,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
     </div>
     <button class="btn" onclick="doRefresh()">手動刷新</button>
   </div>
-  <div class="foot-note">Binance 1分鐘 K線 · 1分鐘分析 + 15秒即時 · Telegram 雙向控制版 · 跳動閾值：ATR×3.0 · 盈虧比 2:1</div>
+  <div class="foot-note">OKX 1分鐘 K線 · 1分鐘分析 + 15秒即時 · Telegram 雙向控制版 · 跳動閾值：ATR×3.0 · 盈虧比 2:1</div>
 
 </div><!-- /wrap -->
 
@@ -809,16 +809,16 @@ function manualExit() {
 }
 
 // ══════════════════════════════════════
-//  Binance K線
+//  OKX K線 + 即時價格
 // ══════════════════════════════════════
 // ══════════════════════════════════════
 //  即時 Ticker（每15秒）
 // ══════════════════════════════════════
 async function fetchTicker() {
   try {
-    const r = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT');
+    const r = await fetch('https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT');
     const d = await r.json();
-    const price = parseFloat(d.price);
+    const price = parseFloat(d.data?.[0]?.last);
     if (!price) return;
     btcUSD = price;
     document.getElementById('btc-price').textContent = fmtUSD(btcUSD);
@@ -848,13 +848,16 @@ function checkStopLoss() {
 }
 
 // ══════════════════════════════════════
-//  15分鐘K線（1分鐘分析 + 15秒即時）
+//  15分鐘K線（OKX）
 // ══════════════════════════════════════
 async function fetch15mKlines() {
   try {
-    const r   = await fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=15m&limit=30');
+    const r   = await fetch('https://www.okx.com/api/v5/market/candles?instId=BTC-USDT&bar=15m&limit=30');
     const raw = await r.json();
-    klines15m = raw.map(k => ({ t:+k[0], o:+k[1], h:+k[2], l:+k[3], c:+k[4], v:+k[5] }));
+    // OKX 返回順序：最新在前，需要反轉為時間正序
+    klines15m = raw.data.slice().reverse().map(k => ({
+      t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5]
+    }));
 
     // 計算15m EMA9 vs EMA21
     const c15 = klines15m.map(k => k.c);
@@ -874,14 +877,17 @@ async function fetch15mKlines() {
 }
 
 // ══════════════════════════════════════
-//  1分鐘 K線（每60秒）
+//  1分鐘 K線（OKX，每60秒）
 // ══════════════════════════════════════
 async function fetchKlines() {
   try {
     // 拉取 200 根 1m K線：前 140 根用於 RSI/EMA warm-up，後 60 根用於圖表顯示
-    const r   = await fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=200');
+    const r   = await fetch('https://www.okx.com/api/v5/market/candles?instId=BTC-USDT&bar=1m&limit=200');
     const raw = await r.json();
-    klines = raw.map(k => ({ t:+k[0], o:+k[1], h:+k[2], l:+k[3], c:+k[4], v:+k[5] }));
+    // OKX 返回順序：最新在前，需要反轉為時間正序
+    klines = raw.data.slice().reverse().map(k => ({
+      t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5]
+    }));
     const kClose = klines[klines.length - 1].c;
     if (!btcUSD) btcUSD = kClose;
 
@@ -1594,7 +1600,7 @@ setInterval(fetchTicker,    15 * 1000);     // 每15秒：即時價格/跳動/�
 setInterval(fetchKlines,    60 * 1000);     // 每60秒：1m K線 + 訊號分析
 setInterval(fetch15mKlines, 5 * 60 * 1000);// 每5分鐘：15m大趨勢
 setInterval(pollNow,        30 * 1000);     // 每30秒：Telegram 指令
-addLog('系統啟動 v2.4 · 三重市場過濾（15m禁止/1h低點/ATR<50）· Wilder RSI · EMA Warm-up · 買入冷卻5min · 跳動 ATR×3.0');
+addLog('系統啟動 v2.5 · OKX API · 三重市場過濾（15m禁止/1h低點/ATR<50）· Wilder RSI · EMA Warm-up · 買入冷卻5min · 跳動 ATR×3.0');
 </script>
 </div><!-- /app-content -->
 </body>
