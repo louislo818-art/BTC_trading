@@ -1,0 +1,1561 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BTC Day Trading 分析儀</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+#lock-screen {
+  position:fixed;inset:0;background:#0f0f0f;
+  display:flex;align-items:center;justify-content:center;
+  z-index:9999;
+}
+#lock-box {
+  background:#1a1a1a;border:1px solid #2a2a2a;border-radius:16px;
+  padding:36px 32px;width:300px;text-align:center;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+}
+#lock-icon { font-size:38px;margin-bottom:14px; }
+#lock-title { font-size:17px;font-weight:600;color:#fff;margin-bottom:5px; }
+#lock-sub   { font-size:12px;color:#555;margin-bottom:22px; }
+#lock-input {
+  width:100%;padding:11px 14px;font-size:22px;letter-spacing:10px;
+  text-align:center;background:#111;border:1px solid #333;border-radius:10px;
+  color:#e0e0e0;outline:none;margin-bottom:12px;font-family:monospace;
+  -webkit-text-security:disc;
+}
+#lock-input:focus { border-color:#555; }
+#lock-input.err   { border-color:#ef4444;animation:shake .3s ease; }
+#lock-btn {
+  width:100%;padding:11px;font-size:14px;font-weight:600;
+  background:#0d2b1a;color:#22c55e;border:1px solid #166534;
+  border-radius:10px;cursor:pointer;transition:background .15s;
+}
+#lock-btn:hover   { background:#0f3320; }
+#lock-btn:active  { transform:scale(0.98); }
+#lock-btn:disabled{ background:#111;color:#333;border-color:#222;cursor:default; }
+#lock-err  { font-size:12px;color:#ef4444;margin-top:10px;min-height:16px; }
+#lock-hint { font-size:11px;color:#444;margin-top:6px; }
+@keyframes shake {
+  0%,100%{ transform:translateX(0); }
+  25%    { transform:translateX(-8px); }
+  75%    { transform:translateX(8px); }
+}
+</style>
+<script>
+const _H = '4c126bb257a91ca00f19c52fecdb911452dd3af156b4fb9b54cdbee15da3c031';
+const MAX = 5, LOCK_MS = 5 * 60 * 1000;
+
+async function _sha(s) {
+  const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
+  return Array.from(new Uint8Array(b)).map(x=>x.toString(16).padStart(2,'0')).join('');
+}
+function _data(d) {
+  if (d) localStorage.setItem('_btcld', JSON.stringify(d));
+  else return JSON.parse(localStorage.getItem('_btcld')||'{}');
+}
+function _show() {
+  document.getElementById('lock-screen').style.display='flex';
+  document.getElementById('app-content').style.display='none';
+  _checkLock();
+}
+function _unlock() {
+  document.getElementById('lock-screen').style.display='none';
+  document.getElementById('app-content').style.display='';
+}
+function _checkLock() {
+  const d=_data(), now=Date.now();
+  const inp=document.getElementById('lock-input');
+  const btn=document.getElementById('lock-btn');
+  const err=document.getElementById('lock-err');
+  const hint=document.getElementById('lock-hint');
+  if (d.lockUntil && now < d.lockUntil) {
+    const rem=Math.ceil((d.lockUntil-now)/60000);
+    err.textContent='已鎖定，請等候 '+rem+' 分鐘後重試';
+    inp.disabled=btn.disabled=true;
+    setTimeout(_checkLock, 15000);
+  } else {
+    err.textContent='';
+    inp.disabled=btn.disabled=false;
+    if (d.attempts>0) hint.textContent='剩餘嘗試次數：'+(MAX-(d.attempts||0));
+  }
+}
+async function _try() {
+  const d=_data(), now=Date.now();
+  if (d.lockUntil && now < d.lockUntil) return;
+  const val=document.getElementById('lock-input').value.trim();
+  if (!val) return;
+  const h=await _sha(val);
+  if (h===_H) {
+    localStorage.removeItem('_btcld');
+    sessionStorage.setItem('_btcok','1');
+    _unlock();
+  } else {
+    const att=(d.attempts||0)+1;
+    const nd={attempts:att};
+    if (att>=MAX) { nd.lockUntil=now+LOCK_MS; }
+    _data(nd);
+    const inp=document.getElementById('lock-input');
+    inp.value=''; inp.classList.add('err');
+    setTimeout(()=>inp.classList.remove('err'),400);
+    _checkLock();
+    if (att<MAX) document.getElementById('lock-err').textContent='密碼錯誤';
+  }
+}
+window.addEventListener('DOMContentLoaded',()=>{
+  if (sessionStorage.getItem('_btcok')==='1') { _unlock(); return; }
+  _show();
+  document.getElementById('lock-input').addEventListener('keydown', e=>{ if(e.key==='Enter') _try(); });
+});
+</script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f0f0f; color: #e0e0e0; padding: 20px; }
+.wrap { max-width: 900px; margin: 0 auto; }
+
+/* Header */
+.hdr { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 20px; flex-wrap: wrap; gap: 12px; padding-bottom: 16px; border-bottom: 1px solid #222; }
+.ttl { font-size: 20px; font-weight: 600; color: #fff; }
+.sub { font-size: 12px; color: #555; margin-top: 3px; }
+.price-big { font-size: 32px; font-weight: 700; color: #fff; line-height: 1.1; }
+.badge { font-size: 12px; padding: 3px 10px; border-radius: 6px; display: inline-block; margin-top: 5px; }
+.up  { background: #0d2b1a; color: #22c55e; }
+.dn  { background: #2b0d0d; color: #ef4444; }
+.neu { background: #1a1a1a; color: #888; }
+.ts  { font-size: 11px; color: #444; margin-top: 4px; }
+
+/* Cards */
+.card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 12px; padding: 16px 20px; margin-bottom: 14px; }
+.card-ttl { font-size: 13px; color: #888; margin-bottom: 14px; font-weight: 500; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.kbadge { font-size: 11px; background: #0c2340; color: #60a5fa; padding: 2px 8px; border-radius: 4px; border: 1px solid #1e3a5f; }
+
+/* State bar */
+.state-bar { border-radius: 10px; padding: 13px 16px; margin-bottom: 14px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; border: 1px solid; }
+.s-empty { background: #151515; border-color: #2a2a2a; }
+.s-hold  { background: #0a1525; border-color: #1e3a5f; }
+.state-lbl { font-size: 15px; font-weight: 600; }
+.s-empty .state-lbl { color: #666; }
+.s-hold  .state-lbl { color: #60a5fa; }
+.state-sub { font-size: 12px; margin-top: 2px; }
+.s-empty .state-sub { color: #444; }
+.s-hold  .state-sub { color: #3a78b5; }
+
+/* Metrics */
+.metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 14px; }
+.mc { background: #151515; border-radius: 10px; padding: 13px 14px; border: 1px solid #222; }
+.mc-lbl { font-size: 11px; color: #555; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.5px; }
+.mc-val { font-size: 17px; font-weight: 600; color: #fff; }
+.mc-sub { font-size: 11px; color: #444; margin-top: 3px; }
+
+/* Signal box */
+.sig { border-radius: 12px; padding: 14px 18px; margin-bottom: 14px; border: 1px solid; }
+.sig-buy  { background: #0a2010; border-color: #166534; }
+.sig-sell { background: #200a0a; border-color: #7f1d1d; }
+.sig-wait { background: #151515; border-color: #2a2a2a; }
+.sig-hold     { background: #0a1525; border-color: #1e3a5f; }
+.sig-breakout { background: #1a0f00; border-color: #854f0b; }
+.sig-hdr  { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.dot   { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.dot-b { background: #22c55e; } .dot-s { background: #ef4444; }
+.dot-w { background: #555; }   .dot-h        { background: #60a5fa; }
+.dot-breakout { background: #f59e0b; }
+.sig-act  { font-size: 16px; font-weight: 600; }
+.t-buy  { color: #22c55e; } .t-sell { color: #ef4444; }
+.t-wait { color: #777; }    .t-hold     { color: #60a5fa; }
+.t-breakout { color: #f59e0b; }
+.sig-conf   { font-size: 12px; color: #444; margin-left: auto; }
+.sig-detail { font-size: 13px; color: #777; line-height: 1.7; white-space: pre-line; margin-top: 4px; }
+
+/* Indicators */
+.inds { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 14px; }
+.ind { background: #151515; border: 1px solid #222; border-radius: 12px; padding: 13px 14px; }
+.ind-lbl  { font-size: 11px; color: #555; margin-bottom: 7px; text-transform: uppercase; letter-spacing: 0.5px; }
+.ind-val  { font-size: 21px; font-weight: 600; margin-bottom: 5px; }
+.bar-bg   { height: 4px; background: #222; border-radius: 2px; overflow: hidden; }
+.bar      { height: 4px; border-radius: 2px; transition: width 0.5s; }
+.ind-note { font-size: 11px; color: #444; margin-top: 5px; }
+
+/* Extra indicators row */
+.ind2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+.ind2-card { background: #151515; border: 1px solid #222; border-radius: 10px; padding: 12px 14px; display: flex; align-items: center; justify-content: space-between; }
+.ind2-lbl { font-size: 11px; color: #555; text-transform: uppercase; letter-spacing: 0.5px; }
+.ind2-val { font-size: 14px; font-weight: 600; }
+.ind2-note { font-size: 11px; color: #444; margin-top: 2px; }
+
+/* Manual price inputs */
+.price-inputs { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; margin-bottom: 12px; }
+.pi-grp { display: flex; flex-direction: column; gap: 5px; }
+.pi-lbl { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+.lbl-e { color: #555; } .lbl-t { color: #22c55e; } .lbl-s { color: #ef4444; }
+
+/* Forms */
+.row  { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; flex-wrap: wrap; }
+.lbl  { font-size: 13px; color: #777; width: 90px; flex-shrink: 0; }
+.inp  { flex: 1; min-width: 160px; font-size: 13px; padding: 7px 10px; border: 1px solid #333; border-radius: 8px; background: #111; color: #e0e0e0; outline: none; }
+.inp:focus { border-color: #555; }
+.inp-tp { border-color: #1a4a1a !important; }
+.inp-sl { border-color: #4a1a1a !important; }
+.hint { font-size: 11px; color: #444; margin-left: 98px; margin-bottom: 8px; }
+
+/* Buttons */
+.btn { padding: 7px 16px; border-radius: 8px; font-size: 13px; cursor: pointer; border: 1px solid #333; background: #1a1a1a; color: #bbb; transition: all 0.15s; font-weight: 500; }
+.btn:hover  { background: #222; border-color: #444; }
+.btn:active { transform: scale(0.97); }
+.btn-ok   { background: #0a2010; color: #22c55e; border-color: #166534; }
+.btn-ok:hover { background: #0d2a16; }
+.btn-ng   { background: #200a0a; color: #ef4444; border-color: #7f1d1d; }
+.btn-ng:hover { background: #2a0d0d; }
+.btn-info { background: #0c2340; color: #60a5fa; border-color: #1e3a5f; }
+.btn-info:hover { background: #0f2d50; }
+.btn-warn { background: #201500; color: #f59e0b; border-color: #78350f; }
+.btn-sm   { padding: 5px 12px; font-size: 12px; }
+.btn-row  { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* Telegram */
+.tg-preview { background: #111; border-radius: 8px; padding: 11px 14px; font-size: 13px; color: #ccc; font-family: monospace; border-left: 3px solid #2AABEE; margin: 10px 0; white-space: pre; line-height: 1.7; }
+.cmd-reply  { background: #111; border-radius: 8px; padding: 11px 14px; font-size: 13px; color: #ccc; border-left: 3px solid #2AABEE; min-height: 54px; white-space: pre-wrap; line-height: 1.7; }
+.cmd-grid   { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; margin-bottom: 12px; }
+.cmd-buy-box { background: #0a1a0a; border: 1px solid #1a3a1a; border-radius: 10px; padding: 13px; margin-bottom: 10px; }
+.cmd-buy-ttl { font-size: 12px; color: #4a9a4a; margin-bottom: 10px; font-weight: 500; }
+.buy-inputs  { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+.sell-grid   { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
+
+/* Status + Log */
+.status      { font-size: 12px; margin-top: 8px; min-height: 16px; color: #555; }
+.status.ok   { color: #22c55e; }
+.status.err  { color: #ef4444; }
+.log         { background: #111; border-radius: 8px; padding: 11px 13px; font-size: 12px; color: #555; font-family: monospace; max-height: 140px; overflow-y: auto; line-height: 1.9; white-space: pre-wrap; }
+
+/* Pulse */
+.pulse     { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; animation: pulse 1.5s infinite; display: inline-block; flex-shrink: 0; }
+.pulse-off { width: 8px; height: 8px; border-radius: 50%; background: #333; display: inline-block; flex-shrink: 0; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.25} }
+.auto-row  { display: flex; align-items: center; gap: 7px; margin-top: 10px; }
+.auto-lbl  { font-size: 12px; color: #22c55e; }
+.auto-off  { font-size: 12px; color: #444; }
+
+/* Poll row */
+.poll-row  { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; flex-wrap: wrap; gap: 8px; }
+.poll-info { display: flex; align-items: center; gap: 6px; }
+
+/* Footer */
+.footer    { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.foot-info { display: flex; gap: 18px; font-size: 12px; color: #444; }
+.foot-note { font-size: 11px; color: #2a2a2a; margin-top: 6px; }
+
+@media(max-width:600px){
+  .metrics { grid-template-columns: repeat(2,1fr); }
+  .inds    { grid-template-columns: repeat(2,1fr); }
+  .ind2    { grid-template-columns: 1fr; }
+  .hdr     { flex-direction: column; }
+  .price-inputs { grid-template-columns: 1fr; }
+  .buy-inputs   { grid-template-columns: 1fr; }
+  .cmd-grid     { grid-template-columns: 1fr 1fr; }
+  .sell-grid    { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<!-- ── 密碼鎖畫面 ── -->
+<div id="lock-screen">
+  <div id="lock-box">
+    <div id="lock-icon">🔐</div>
+    <div id="lock-title">BTC Day Trading 分析儀</div>
+    <div id="lock-sub">請輸入密碼以繼續</div>
+    <input id="lock-input" type="password" maxlength="20" placeholder="••••" autocomplete="off" autofocus>
+    <button id="lock-btn" onclick="_try()">確認</button>
+    <div id="lock-err"></div>
+    <div id="lock-hint"></div>
+  </div>
+</div>
+
+<!-- ── App 主體（解鎖後顯示）── -->
+<div id="app-content" style="display:none">
+<div class="wrap">
+
+  <!-- Header -->
+  <div class="hdr">
+    <div>
+      <div class="ttl">BTC Day Trading 分析儀</div>
+      <div class="sub">本金 USD 3,000 · 1m K線(200根) + Wilder RSI + EMA Warm-up + 15m過濾</div>
+    </div>
+    <div style="text-align:right">
+      <div class="price-big" id="btc-price">載入中...</div>
+      <div><span class="badge neu" id="price-change">--</span></div>
+      <div class="ts" id="last-update">--</div>
+    </div>
+  </div>
+
+  <!-- 持倉狀態 -->
+  <div class="state-bar s-empty" id="state-bar">
+    <div>
+      <div class="state-lbl" id="state-lbl">空倉中 — 等待買入訊號</div>
+      <div class="state-sub" id="state-sub">AI 自動監察，出現訊號時通知</div>
+    </div>
+    <div style="display:flex;gap:8px;">
+      <button class="btn btn-ok btn-sm" onclick="manualEnter()">確認買入</button>
+      <button class="btn btn-ng btn-sm" id="exit-btn" onclick="manualExit()" style="display:none">確認賣出</button>
+    </div>
+  </div>
+
+  <!-- 倉位設定 -->
+  <div class="card" id="price-card">
+    <div class="card-ttl">倉位設定 <span style="font-size:11px;color:#444;font-weight:400;">留空則自動計算</span></div>
+    <div class="price-inputs" style="grid-template-columns:1fr 1fr;">
+      <div class="pi-grp">
+        <span class="pi-lbl lbl-e">買入價 USD</span>
+        <input id="inp-entry" class="inp" type="number" step="0.01" placeholder="留空 = 現價">
+      </div>
+      <div class="pi-grp">
+        <span class="pi-lbl lbl-s">止損價 USD</span>
+        <input id="inp-sl" class="inp inp-sl" type="number" step="0.01" placeholder="留空 = 自動-USD 25">
+      </div>
+    </div>
+    <input id="inp-tp" type="hidden" value="">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <button class="btn btn-ok btn-sm" onclick="applyPrices()">套用設定</button>
+      <button class="btn btn-sm" onclick="clearPrices()">重設</button>
+      <span style="font-size:11px;color:#444;" id="price-hint">填好後按「套用設定」，再按「確認買入」</span>
+    </div>
+  </div>
+
+  <!-- 持倉資訊 -->
+  <div class="metrics" style="grid-template-columns:repeat(3,1fr);">
+    <div class="mc">
+      <div class="mc-lbl">買入價</div>
+      <div class="mc-val" id="m-entry">--</div>
+      <div class="mc-sub" id="m-entry-time">未入市</div>
+    </div>
+    <div class="mc">
+      <div class="mc-lbl">止損位</div>
+      <div class="mc-val" id="m-sl" style="color:#ef4444">--</div>
+      <div class="mc-sub" id="m-sl-sub">-USD 25</div>
+    </div>
+    <div class="mc">
+      <div class="mc-lbl">持倉盈虧</div>
+      <div class="mc-val" id="m-pnl">--</div>
+      <div class="mc-sub" id="m-pnl-pct">未持倉</div>
+    </div>
+  </div>
+  <div id="m-tp" style="display:none"></div>
+  <div id="m-tp-sub" style="display:none"></div>
+
+  <!-- 圖表 -->
+  <div class="card">
+    <div class="card-ttl">
+      BTC/USD 走勢
+      <span class="kbadge">1分鐘 K線 · 60根</span>
+    </div>
+    <canvas id="priceChart" height="140"></canvas>
+  </div>
+
+  <!-- 訊號框 -->
+  <div id="sig-box" class="sig sig-wait">
+    <div class="sig-hdr">
+      <div class="dot dot-w" id="sig-dot"></div>
+      <div class="sig-act t-wait" id="sig-act">載入 K 線數據中...</div>
+      <div class="sig-conf" id="sig-conf"></div>
+    </div>
+    <div class="sig-detail" id="sig-detail">正在從 Binance 獲取 1分鐘 K線，請稍候...</div>
+  </div>
+
+  <!-- 技術指標 -->
+  <div class="inds">
+    <div class="ind">
+      <div class="ind-lbl">RSI (14) · 5m</div>
+      <div class="ind-val" id="i-rsi" style="color:#666">--</div>
+      <div class="bar-bg"><div class="bar" id="i-rsi-b" style="width:50%;background:#222"></div></div>
+      <div class="ind-note" id="i-rsi-n">超買 &gt;70 / 超賣 &lt;30</div>
+    </div>
+    <div class="ind">
+      <div class="ind-lbl">MACD · 5m</div>
+      <div class="ind-val" id="i-macd" style="color:#666">--</div>
+      <div class="bar-bg"><div class="bar" id="i-macd-b" style="width:50%;background:#222"></div></div>
+      <div class="ind-note" id="i-macd-n">黃金交叉 / 死亡交叉</div>
+    </div>
+    <div class="ind">
+      <div class="ind-lbl">布林帶 · 5m</div>
+      <div class="ind-val" id="i-bb" style="color:#666">--</div>
+      <div class="bar-bg"><div class="bar" id="i-bb-b" style="width:50%;background:#222"></div></div>
+      <div class="ind-note" id="i-bb-n">上軌超買 / 下軌超賣</div>
+    </div>
+  </div>
+
+  <!-- EMA + 成交量 -->
+  <div class="ind2" style="grid-template-columns:repeat(2,1fr);">
+    <div class="ind2-card">
+      <div>
+        <div class="ind2-lbl">1m EMA 趨勢</div>
+        <div class="ind2-val" id="i-ema" style="color:#555;margin-top:5px;">載入中...</div>
+        <div class="ind2-note">下降趨勢時扣分</div>
+      </div>
+    </div>
+    <div class="ind2-card">
+      <div>
+        <div class="ind2-lbl">成交量確認</div>
+        <div class="ind2-val" id="i-vol" style="color:#555;margin-top:5px;">載入中...</div>
+        <div class="ind2-note" id="i-vol-n">放量才可靠，縮量扣分</div>
+      </div>
+    </div>
+  </div>
+  <!-- ATR + 15m 趨勢 -->
+  <div class="ind2" style="grid-template-columns:repeat(2,1fr);margin-bottom:14px;">
+    <div class="ind2-card">
+      <div>
+        <div class="ind2-lbl">ATR (14) · 動態止損參考</div>
+        <div class="ind2-val" id="i-atr" style="color:#555;margin-top:5px;">計算中...</div>
+        <div class="ind2-note">止損 = 現價 - ATR × 1.5</div>
+      </div>
+    </div>
+    <div class="ind2-card">
+      <div>
+        <div class="ind2-lbl">15分鐘大趨勢過濾</div>
+        <div class="ind2-val" id="i-trend15m" style="color:#555;margin-top:5px;">載入中...</div>
+        <div class="ind2-note">逆勢時信心度減半</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 價格跳動監察 -->
+  <div id="jump-box" style="background:#151515;border:1px solid #2a2a2a;border-radius:12px;padding:14px 18px;margin-bottom:14px;transition:background 0.4s,border-color 0.4s;">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
+      <div>
+        <div style="font-size:11px;color:#555;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">持倉跳動監察（以買入價計算）</div>
+        <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;">
+          <div id="jump-display" style="font-size:20px;font-weight:600;color:#666;">等待數據...</div>
+          <div style="font-size:12px;color:#444;" id="jump-base-lbl">基準價：--</div>
+        </div>
+        <div style="font-size:11px;color:#444;margin-top:4px;" id="jump-box-threshold">閾值：ATR×2.0（載入中...）</div>
+      </div>
+      <button class="btn btn-sm" onclick="resetJumpBase()" style="flex-shrink:0;display:none;" id="jump-reset-btn">重設基準價</button>
+    </div>
+  </div>
+
+  <!-- Telegram 設定 -->
+  <div class="card">
+    <div class="card-ttl">Telegram 設定</div>
+    <div class="row">
+      <span class="lbl">Bot Token</span>
+      <input class="inp" id="tg-token" placeholder="123456789:ABCdef..." type="text">
+    </div>
+    <div class="hint">從 @BotFather 取得，發送 /newbot</div>
+    <div class="row">
+      <span class="lbl">Chat ID</span>
+      <input class="inp" id="tg-chatid" placeholder="123456789" type="text">
+    </div>
+    <div class="hint">從 @my_id_bot 或 @getidsbot 取得</div>
+    <div style="font-size:12px;color:#555;margin-bottom:5px;">通知預覽：</div>
+    <div class="tg-preview" id="tg-preview">等待數據...</div>
+    <div class="btn-row" style="margin-top:12px;">
+      <button class="btn btn-info" onclick="testTG()">測試發送</button>
+      <button class="btn btn-ok" id="auto-btn" onclick="toggleAuto()">自動通知：開啟</button>
+    </div>
+    <div class="auto-row">
+      <span class="pulse" id="auto-dot"></span>
+      <span class="auto-lbl" id="auto-lbl">AI 監察中 · 空倉找買入 · 持倉看止盈止損</span>
+    </div>
+    <div class="status" id="tg-status"></div>
+  </div>
+
+  <!-- Telegram 指令控制 -->
+  <div class="card">
+    <div class="card-ttl">
+      Telegram 指令控制
+      <span style="font-size:11px;color:#444;font-weight:400;">在此操作等同 Telegram 發指令</span>
+    </div>
+
+    <!-- 查詢按鈕 -->
+    <div class="cmd-grid">
+      <button class="btn btn-sm" onclick="runCmd('/price')">/price 現價</button>
+      <button class="btn btn-sm" onclick="runCmd('/status')">/status 持倉</button>
+      <button class="btn btn-sm" onclick="runCmd('/summary')">/summary 摘要</button>
+    </div>
+
+    <!-- 買入 -->
+    <div class="cmd-buy-box">
+      <div class="cmd-buy-ttl">買入指令 /buy</div>
+      <div class="buy-inputs" style="grid-template-columns:1fr 1fr;">
+        <div>
+          <div style="font-size:11px;color:#555;margin-bottom:4px;">買入價 USD</div>
+          <input id="cmd-entry" class="inp" type="number" step="0.01" placeholder="留空=現價" style="width:100%;padding:6px 8px;font-size:13px;">
+        </div>
+        <div>
+          <div style="font-size:11px;color:#ef4444;margin-bottom:4px;">止損價 USD</div>
+          <input id="cmd-sl" class="inp inp-sl" type="number" step="0.01" placeholder="留空=自動" style="width:100%;padding:6px 8px;font-size:13px;">
+        </div>
+      </div>
+      <input id="cmd-tp" type="hidden" value="">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <button class="btn btn-ok btn-sm" onclick="runBuyCmd()" style="flex:1;max-width:160px;">/buy 確認買入</button>
+        <button class="btn btn-sm" onclick="clearCmdInputs()">清除</button>
+        <span id="cmd-buy-hint" style="font-size:11px;color:#444;">填入價格或留空用現價</span>
+      </div>
+    </div>
+
+    <!-- 賣出 / 取消 -->
+    <div class="sell-grid">
+      <button class="btn btn-ng" onclick="runCmd('/sell')">/sell 確認賣出平倉</button>
+      <button class="btn btn-warn" onclick="runCmd('/cancel')">/cancel 取消持倉重設</button>
+    </div>
+
+    <!-- 回覆顯示 -->
+    <div style="font-size:12px;color:#555;margin-bottom:6px;">指令回覆：</div>
+    <div class="cmd-reply" id="cmd-reply">等待指令...</div>
+
+    <!-- 輪詢狀態 -->
+    <div class="poll-row">
+      <div class="poll-info">
+        <span class="pulse" id="poll-dot"></span>
+        <span style="font-size:12px;color:#555;" id="poll-status">每30秒自動收取 Telegram 回覆</span>
+      </div>
+      <button class="btn btn-sm" onclick="pollNow()">立即收取</button>
+    </div>
+    <div class="status" id="cmd-status"></div>
+  </div>
+
+  <!-- 通知記錄 -->
+  <div class="card">
+    <div class="card-ttl">通知記錄</div>
+    <div class="log" id="log-area">系統啟動中...</div>
+  </div>
+
+  <div class="footer">
+    <div class="foot-info">
+      <span>倉位：USD 3,000</span>
+      <span>止損：-USD 25</span>
+    </div>
+    <button class="btn" onclick="doRefresh()">手動刷新</button>
+  </div>
+  <div class="foot-note">Binance 1分鐘 K線 · 1分鐘分析 + 15秒即時 · Telegram 雙向控制版 · 跳動閾值：ATR×3.0 · 盈虧比 2:1</div>
+
+</div><!-- /wrap -->
+
+<script>
+// ══════════════════════════════════════
+//  常數
+// ══════════════════════════════════════
+const POS_USD   = 3000;   // 本金 USD
+const SL_USD    = 150;    // 固定止損備用（ATR動態止損優先）
+const BREAKEVEN  = 300;    // 利潤達此值自動保本
+// 跳動閾值已改為動態 ATR 倍數（見 checkPriceJump）
+const JUMP_ATR_LOW  = 3.0;   // 跳動通知下限：ATR 倍數（止盈目標，盈虧比 2:1）
+const JUMP_ATR_HIGH = 3.5;   // 跳動通知上限：ATR 倍數
+const JUMP_FALLBACK_LOW  = 240; // ATR 未就緒時的備用固定值
+const JUMP_FALLBACK_HIGH = 280;
+
+// ── 市場環境過濾門檻 ──────────────────────────────
+const ATR_MIN     = 50;   // ATR 低於此值代表波動太小，手續費難覆蓋，不入市
+// 1h 低點過濾：klines 最後 60 根（=1小時），現價若在低點附近則視為下跌通道
+
+// ══════════════════════════════════════
+//  狀態變數
+// ══════════════════════════════════════
+let btcUSD   = 0;
+let klines   = [];
+let autoOn   = true;
+let myChart  = null;
+let logs     = [];
+
+// 持倉狀態
+let mode      = 'empty';   // 'empty' | 'holding'
+let entryUSD  = 0;
+let tpUSD     = 0;
+let slUSD     = 0;
+let entryTime = '';
+
+// Telegram 輪詢
+let lastUpdateId = 0;
+
+// 價格跳動監察（以買入價為基準）
+let jumpBasePrice   = 0;
+let jumpNotified    = false;
+let jumpNotifiedAt  = 0;       // 上次通知的時間戳（毫秒）
+const JUMP_COOLDOWN = 10 * 60 * 1000; // 通知冷卻：10 分鐘內不重複觸發
+let breakevenDone   = false; // 保本止損是否已觸發
+
+// 多重時間框架
+let klines15m       = [];   // 15分鐘K線
+let trend15m        = 'neutral'; // 'up' | 'down' | 'neutral'
+let atrValue        = 0;    // ATR(14) 動態止損
+
+// 買入訊號通知防重複
+let lastSignalSentAt   = 0;        // 上次買入訊號發送時間戳
+const SIGNAL_COOLDOWN  = 5 * 60 * 1000; // 5 分鐘內不重複發買入通知
+
+// ══════════════════════════════════════
+//  工具函數
+// ══════════════════════════════════════
+function fmtUSD(n) {
+  return 'USD ' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// ══════════════════════════════════════
+//  LocalStorage 持久化
+// ══════════════════════════════════════
+const LS_KEY = 'btc_trade_state';
+
+function saveState() {
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify({
+      mode, entryUSD, slUSD, tpUSD, entryTime,
+      jumpBasePrice, jumpNotified, jumpNotifiedAt, breakevenDone,
+      lastUpdateId, lastSignalSentAt
+    }));
+  } catch(e) {}
+}
+
+function loadState() {
+  try {
+    const s = localStorage.getItem(LS_KEY);
+    if (!s) return;
+    const d = JSON.parse(s);
+    mode          = d.mode          || 'empty';
+    entryUSD      = d.entryUSD      || 0;
+    slUSD         = d.slUSD         || 0;
+    tpUSD         = d.tpUSD         || 0;
+    entryTime     = d.entryTime     || '';
+    jumpBasePrice  = d.jumpBasePrice  || 0;
+    jumpNotified   = d.jumpNotified   || false;
+    jumpNotifiedAt = d.jumpNotifiedAt || 0;
+    breakevenDone  = d.breakevenDone  || false;
+    lastSignalSentAt = d.lastSignalSentAt || 0;
+    lastUpdateId  = d.lastUpdateId  || 0;
+
+    if (mode === 'holding' && entryUSD) {
+      restoreHoldingUI();
+      addLog('✅ 已從 localStorage 恢復持倉狀態：買入 ' + fmtUSD(entryUSD));
+    }
+  } catch(e) {}
+}
+
+function restoreHoldingUI() {
+  const qty     = POS_USD / entryUSD;
+  const slLoss  = (slUSD - entryUSD) * qty;
+  document.getElementById('m-entry').textContent      = fmtUSD(entryUSD);
+  document.getElementById('m-entry-time').textContent = entryTime;
+  document.getElementById('m-sl').textContent         = fmtUSD(slUSD);
+  document.getElementById('m-sl-sub').textContent     = 'USD ' + slLoss.toFixed(2);
+  const bar = document.getElementById('state-bar');
+  bar.className = 'state-bar s-hold';
+  document.getElementById('state-lbl').textContent = '持倉中 — 監察跳動 / 止損';
+  document.getElementById('state-sub').textContent = '買入 ' + fmtUSD(entryUSD) + '  止損 ' + fmtUSD(slUSD);
+  document.getElementById('exit-btn').style.display = '';
+  document.getElementById('price-card').style.display = 'none';
+  // Restore jump box
+  const jumpLbl = document.getElementById('jump-base-lbl');
+  if (jumpLbl) jumpLbl.textContent = '買入價：' + fmtUSD(entryUSD) + '（已恢復）';
+  const jumpBox = document.getElementById('jump-box');
+  if (jumpBox) { jumpBox.style.borderColor = '#1e3a5f'; jumpBox.style.background = '#0a1525'; }
+}
+
+function addLog(msg) {
+  const t = new Date().toLocaleTimeString('zh-HK');
+  logs.unshift('[' + t + '] ' + msg);
+  if (logs.length > 60) logs.pop();
+  document.getElementById('log-area').textContent = logs.join('\n');
+}
+
+// ══════════════════════════════════════
+//  持倉管理
+// ══════════════════════════════════════
+// ATR(14) 計算
+function calcATR(kl, period) {
+  if (kl.length < period + 1) return 0;
+  const trs = [];
+  for (let i = kl.length - period; i < kl.length; i++) {
+    const h = kl[i].h, l = kl[i].l, pc = kl[i-1].c;
+    trs.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
+  }
+  return trs.reduce((a, b) => a + b, 0) / period;
+}
+
+function calcTPSL(price) {
+  const qty = POS_USD / price;
+  // 動態止損：ATR * 1.5（若ATR可用），否則回退固定止損
+  const atr = atrValue || 0;
+  const dynSL = atr > 0 ? price - atr * 1.5 : price - SL_USD / qty;
+  return {
+    tp: 0,
+    sl: dynSL
+  };
+}
+
+function enterPosition(price, customTP, customSL) {
+  mode      = 'holding';
+  entryUSD  = price;
+  entryTime = new Date().toLocaleTimeString('zh-HK');
+
+  const auto = calcTPSL(price);
+  tpUSD = customTP > 0 ? customTP : auto.tp;
+  slUSD = customSL > 0 ? customSL : auto.sl;
+
+  const qty   = POS_USD / entryUSD;
+  const slLoss = (slUSD - entryUSD) * qty;
+
+  document.getElementById('m-entry').textContent      = fmtUSD(entryUSD);
+  document.getElementById('m-entry-time').textContent = entryTime;
+  document.getElementById('m-sl').textContent         = fmtUSD(slUSD);
+  document.getElementById('m-sl-sub').textContent     = 'USD ' + slLoss.toFixed(2);
+
+  const bar = document.getElementById('state-bar');
+  bar.className = 'state-bar s-hold';
+  document.getElementById('state-lbl').textContent = '持倉中 — 監察跳動 / 止損';
+  const jumpThresh = atrValue > 0 ? 'ATR×' + JUMP_ATR_LOW + ' ≈ USD ' + (atrValue * JUMP_ATR_LOW).toFixed(0) : 'USD ' + JUMP_FALLBACK_LOW;
+  document.getElementById('state-sub').textContent = '買入 ' + fmtUSD(entryUSD) + '  止損 ' + fmtUSD(slUSD) + '  跳動閾值 ' + jumpThresh;
+  document.getElementById('exit-btn').style.display = '';
+  document.getElementById('price-card').style.display = 'none';
+
+  // 設定跳動基準價 = 買入價
+  jumpBasePrice = entryUSD;
+  jumpNotified  = false;
+  const jumpLbl = document.getElementById('jump-base-lbl');
+  if (jumpLbl) jumpLbl.textContent = '買入價：' + fmtUSD(entryUSD) + '（監察中）';
+  const jumpBox = document.getElementById('jump-box');
+  if (jumpBox) { jumpBox.style.borderColor = '#1e3a5f'; jumpBox.style.background = '#0a1525'; }
+  const jumpEl = document.getElementById('jump-display');
+  if (jumpEl) { jumpEl.textContent = 'USD 0（剛買入）'; jumpEl.style.color = '#555'; }
+
+  breakevenDone = false;
+  saveState();
+  addLog('進入持倉：' + fmtUSD(entryUSD) + '  止損 ' + fmtUSD(slUSD) + '  跳動監察已啟動');
+}
+
+function exitPosition(reason) {
+  mode     = 'empty';
+  entryUSD = tpUSD = slUSD = 0;
+
+  document.getElementById('m-entry').textContent      = '--';
+  document.getElementById('m-entry-time').textContent = '未入市';
+  document.getElementById('m-sl').textContent         = '--';
+  document.getElementById('m-sl-sub').textContent     = '-USD 25';
+  document.getElementById('m-pnl').textContent        = '--';
+  document.getElementById('m-pnl-pct').textContent    = '未持倉';
+  document.getElementById('m-pnl').style.color        = '#fff';
+
+  const bar = document.getElementById('state-bar');
+  bar.className = 'state-bar s-empty';
+  document.getElementById('state-lbl').textContent = '空倉中 — 等待下一個買入訊號';
+  document.getElementById('state-sub').textContent = '上次出場：' + reason + ' @ ' + fmtUSD(btcUSD);
+  document.getElementById('exit-btn').style.display = 'none';
+  document.getElementById('price-card').style.display = '';
+
+  // 清除跳動監察
+  jumpBasePrice = 0;
+  jumpNotified  = false;
+  const jumpLblEx = document.getElementById('jump-base-lbl');
+  if (jumpLblEx) jumpLblEx.textContent = '買入價：-- （空倉中）';
+  const jumpElEx = document.getElementById('jump-display');
+  if (jumpElEx) { jumpElEx.textContent = '空倉中，不監察'; jumpElEx.style.color = '#444'; }
+  const jumpBoxEx = document.getElementById('jump-box');
+  if (jumpBoxEx) { jumpBoxEx.style.borderColor = '#2a2a2a'; jumpBoxEx.style.background = '#151515'; }
+
+  breakevenDone = false;
+  saveState();
+  addLog('退出持倉（' + reason + '）@ ' + fmtUSD(btcUSD));
+}
+
+function updatePnL() {
+  if (mode !== 'holding' || !entryUSD) return;
+  const qty    = POS_USD / entryUSD;
+  const pnl    = (btcUSD - entryUSD) * qty;
+  const pnlEl  = document.getElementById('m-pnl');
+  pnlEl.textContent = (pnl >= 0 ? '+' : '') + 'USD ' + pnl.toFixed(2);
+  pnlEl.style.color = pnl >= 0 ? '#22c55e' : '#ef4444';
+  document.getElementById('m-pnl-pct').textContent = (pnl >= 0 ? '+' : '') + (pnl / POS_USD * 100).toFixed(2) + '%';
+}
+
+// 倉位設定輸入
+function applyPrices() {
+  const e = parseFloat(document.getElementById('inp-entry').value) || 0;
+  const t = parseFloat(document.getElementById('inp-tp').value) || 0;
+  const s = parseFloat(document.getElementById('inp-sl').value) || 0;
+  const parts = [];
+  if (e > 0) parts.push('買入 ' + fmtUSD(e));
+  if (t > 0) parts.push('止盈 ' + fmtUSD(t));
+  if (s > 0) parts.push('止損 ' + fmtUSD(s));
+  const hint = document.getElementById('price-hint');
+  hint.textContent = parts.length ? '已設定：' + parts.join('  ') + ' → 按「確認買入」生效' : '全部留空，自動計算';
+  hint.style.color = parts.length ? '#22c55e' : '#444';
+}
+
+function clearPrices() {
+  ['inp-entry','inp-tp','inp-sl'].forEach(id => document.getElementById(id).value = '');
+  const hint = document.getElementById('price-hint');
+  hint.textContent = '已重設，將使用自動計算';
+  hint.style.color = '#444';
+}
+
+function manualEnter() {
+  if (mode === 'holding') { alert('已在持倉中！請先確認賣出。'); return; }
+  const e = parseFloat(document.getElementById('inp-entry').value) || btcUSD;
+  const t = parseFloat(document.getElementById('inp-tp').value) || 0;
+  const s = parseFloat(document.getElementById('inp-sl').value) || 0;
+  enterPosition(e, t, s);
+  const jumpThreshTg = atrValue > 0 ? 'ATR×' + JUMP_ATR_LOW + ' ≈ USD ' + (atrValue * JUMP_ATR_LOW).toFixed(0) : 'USD ' + JUMP_FALLBACK_LOW;
+  tgSend('✅ 確認買入 BTC\n' + fmtUSD(entryUSD) + '\n止損 ' + fmtUSD(slUSD) + '\n跳動閾值 ' + jumpThreshTg + ' 時通知賣出');
+}
+
+function manualExit() {
+  if (mode === 'empty') return;
+  const isStop = btcUSD <= slUSD;
+  const action = isStop ? '止蝕賣出' : '賣出';
+  const qty    = POS_USD / entryUSD;
+  const pnl    = (btcUSD - entryUSD) * qty;
+  exitPosition(action);
+  tgSend((isStop ? '🔴 ' : '✅ ') + action + ' BTC\n' + fmtUSD(btcUSD) + '\n盈虧 ' + (pnl >= 0 ? '+' : '') + 'USD ' + pnl.toFixed(2));
+}
+
+// ══════════════════════════════════════
+//  Binance K線
+// ══════════════════════════════════════
+// ══════════════════════════════════════
+//  即時 Ticker（每15秒）
+// ══════════════════════════════════════
+async function fetchTicker() {
+  try {
+    const r = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT');
+    const d = await r.json();
+    const price = parseFloat(d.price);
+    if (!price) return;
+    btcUSD = price;
+    document.getElementById('btc-price').textContent = fmtUSD(btcUSD);
+    document.getElementById('last-update').textContent = '即時：' + new Date().toLocaleTimeString('zh-HK') + '（15秒）';
+    updatePnL();
+    checkPriceJump();   // 跳動監察隨即時價格更新
+    checkStopLoss();    // 止損檢查隨即時價格更新
+  } catch(e) { /* 靜默失敗 */ }
+}
+
+// ══════════════════════════════════════
+//  止損即時檢查
+// ══════════════════════════════════════
+function checkStopLoss() {
+  if (mode !== 'holding' || !slUSD || !btcUSD) return;
+  if (btcUSD <= slUSD) {
+    const qty    = POS_USD / entryUSD;
+    const pnl    = (btcUSD - entryUSD) * qty;
+    const pnlStr = (pnl >= 0 ? '+' : '') + 'USD ' + pnl.toFixed(2);
+    setSig('sig-sell','dot-s','t-sell', '止損觸發 — ' + fmtUSD(btcUSD), '','價格跌破止損位 ' + fmtUSD(slUSD) + '\n立即執行止蝕！');
+    if (autoOn) {
+      addLog('⚡ 止損觸發（即時）！發送 Telegram...');
+      tgSend('🔴 止蝕賣出 BTC\n現價：' + fmtUSD(btcUSD) + '\n跌破止損位：' + fmtUSD(slUSD) + '\n盈虧：' + pnlStr);
+      exitPosition('止蝕賣出');
+    }
+  }
+}
+
+// ══════════════════════════════════════
+//  15分鐘K線（1分鐘分析 + 15秒即時）
+// ══════════════════════════════════════
+async function fetch15mKlines() {
+  try {
+    const r   = await fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=15m&limit=30');
+    const raw = await r.json();
+    klines15m = raw.map(k => ({ t:+k[0], o:+k[1], h:+k[2], l:+k[3], c:+k[4], v:+k[5] }));
+
+    // 計算15m EMA9 vs EMA21
+    const c15 = klines15m.map(k => k.c);
+    const e9  = calcEMA(c15.slice(-20), 9);
+    const e21 = calcEMA(c15, 21);
+    trend15m  = e9 > e21 * 1.001 ? 'up' : e9 < e21 * 0.999 ? 'down' : 'neutral';
+
+    // 更新UI（顯示過濾狀態）
+    const el = document.getElementById('i-trend15m');
+    if (el) {
+      el.textContent = trend15m === 'up'   ? 'EMA9 > EMA21  大趨勢向上 ✓ 可入市'
+                     : trend15m === 'down' ? 'EMA9 < EMA21  大趨勢向下 🚫 禁止買入'
+                     : 'EMA9 ≈ EMA21  大趨勢中性（可入市）';
+      el.style.color = trend15m === 'up' ? '#22c55e' : trend15m === 'down' ? '#ef4444' : '#888';
+    }
+  } catch(e) { addLog('15m K線獲取失敗：' + e.message); }
+}
+
+// ══════════════════════════════════════
+//  1分鐘 K線（每60秒）
+// ══════════════════════════════════════
+async function fetchKlines() {
+  try {
+    // 拉取 200 根 1m K線：前 140 根用於 RSI/EMA warm-up，後 60 根用於圖表顯示
+    const r   = await fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=200');
+    const raw = await r.json();
+    klines = raw.map(k => ({ t:+k[0], o:+k[1], h:+k[2], l:+k[3], c:+k[4], v:+k[5] }));
+    const kClose = klines[klines.length - 1].c;
+    if (!btcUSD) btcUSD = kClose;
+
+    // 計算ATR(14) 並更新全局 atrValue
+    atrValue = calcATR(klines, 14);
+    const atrEl = document.getElementById('i-atr');
+    if (atrEl) {
+      const atrOk = atrValue >= ATR_MIN;
+      atrEl.textContent = 'USD ' + atrValue.toFixed(0) + (atrOk ? '  ✓ 可入市' : '  🚫 波動過低');
+      atrEl.style.color = atrValue > 200 ? '#f59e0b' : atrOk ? '#e0e0e0' : '#ef4444';
+    }
+
+    const chg = (kClose - klines[0].o) / klines[0].o * 100;
+    const pc  = document.getElementById('price-change');
+    pc.textContent = (chg >= 0 ? '+' : '') + chg.toFixed(2) + '% (1h)';
+    pc.className   = 'badge ' + (chg >= 0 ? 'up' : 'dn');
+
+    updateChart();
+    analyze(chg);   // 技術指標僅在K線更新時計算
+  } catch(e) {
+    addLog('K線獲取失敗：' + e.message);
+  }
+}
+
+// ══════════════════════════════════════
+//  價格跳動監察（動態閾值：ATR × 2.0）
+// ══════════════════════════════════════
+function checkPriceJump() {
+  if (mode !== 'holding' || !jumpBasePrice || !btcUSD) return;
+
+  const diff  = btcUSD - jumpBasePrice;
+  const jump  = Math.abs(diff);
+  const dir   = diff > 0 ? '上升' : '下跌';
+  const arrow = diff > 0 ? '↑' : '↓';
+  const sign  = diff > 0 ? '+' : '';
+  const qty   = POS_USD / jumpBasePrice;
+  const pnl   = diff * qty;
+
+  // ── 動態跳動閾值（ATR × 倍數，ATR 未就緒則用備用固定值）──
+  const jumpLow  = atrValue > 0 ? atrValue * JUMP_ATR_LOW  : JUMP_FALLBACK_LOW;
+  const jumpHigh = atrValue > 0 ? atrValue * JUMP_ATR_HIGH : JUMP_FALLBACK_HIGH;
+
+  // ── 自動保本止損（利潤達 BREAKEVEN USD）──
+  if (pnl >= BREAKEVEN && !breakevenDone) {
+    breakevenDone = true;
+    slUSD = entryUSD;  // 止損移至買入價
+    saveState();
+    // 更新止損顯示
+    document.getElementById('m-sl').textContent     = fmtUSD(slUSD) + ' 🛡️';
+    document.getElementById('m-sl-sub').textContent = '保本止損（已鎖定）';
+    addLog('🛡️ 保本止損已觸發！止損移至買入價 ' + fmtUSD(entryUSD));
+    if (autoOn) tgSend('🛡️ 已觸發保本止損，風險已降至零。\n持倉盈虧：+USD ' + pnl.toFixed(2) + '\n止損已移至買入價：' + fmtUSD(entryUSD));
+    const jumpBox = document.getElementById('jump-box');
+    if (jumpBox) { jumpBox.style.borderColor = '#854f0b'; jumpBox.style.background = '#1a0f00'; }
+  }
+
+  // 更新跳動顯示（含動態閾值標示）
+  const jumpEl = document.getElementById('jump-box-threshold');
+  if (jumpEl) jumpEl.textContent = '閾值：ATR×' + JUMP_ATR_LOW + ' = USD ' + jumpLow.toFixed(0) + '（ATR ' + atrValue.toFixed(0) + '）';
+
+  const jumpDisp = document.getElementById('jump-display');
+  if (jumpDisp) {
+    const pnlStr = (pnl >= 0 ? '+' : '') + 'USD ' + pnl.toFixed(0);
+    jumpDisp.textContent = sign + 'USD ' + diff.toFixed(0) + '  (' + pnlStr + ')';
+    if      (jump >= jumpHigh) jumpDisp.style.color = diff > 0 ? '#22c55e' : '#ef4444';
+    else if (jump >= jumpLow)  jumpDisp.style.color = diff > 0 ? '#4ade80' : '#f87171';
+    else                       jumpDisp.style.color = '#666';
+  }
+
+  // 跳動達閾值通知（冷卻機制防重複）
+  const now = Date.now();
+  const cooldownOk = (now - jumpNotifiedAt) > JUMP_COOLDOWN;
+
+  if (jump >= jumpLow && cooldownOk) {
+    jumpNotifiedAt = now;
+    const pnlStr = (pnl >= 0 ? '+' : '') + 'USD ' + pnl.toFixed(2);
+    const emoji  = jump >= jumpHigh ? '⚡' : '📢';
+    const atrLabel = atrValue > 0
+      ? '（ATR×' + JUMP_ATR_LOW + ' = USD ' + jumpLow.toFixed(0) + '）'
+      : '（固定備用值）';
+    const msg = emoji + ' BTC 跳動 ' + arrow + ' 建議賣出\n'
+      + '買入價：' + fmtUSD(jumpBasePrice) + '\n'
+      + '現　價：' + fmtUSD(btcUSD) + '\n'
+      + '跳動幅：' + sign + 'USD ' + diff.toFixed(0) + ' ' + atrLabel + '\n'
+      + '持倉盈虧：' + pnlStr + '\n'
+      + '建議考慮賣出！';
+    addLog('跳動通知：' + arrow + ' USD ' + jump.toFixed(0) + ' / 閾值 USD ' + jumpLow.toFixed(0) + '（ATR×' + JUMP_ATR_LOW + '）');
+    if (autoOn) tgSend(msg);
+    const jumpBox = document.getElementById('jump-box');
+    if (jumpBox) {
+      jumpBox.style.borderColor = diff > 0 ? '#166534' : '#7f1d1d';
+      jumpBox.style.background  = diff > 0 ? '#0a2010' : '#200a0a';
+    }
+  } else if (jump >= jumpLow && !cooldownOk) {
+    // 冷卻中，靜默
+  }
+}
+
+// ══════════════════════════════════════
+//  技術指標
+// ══════════════════════════════════════
+function closes() { return klines.map(k => k.c); }
+
+// RSI — Wilder's Smoothing (標準算法)
+// 需要 p+1 根才能算第一個 Wilder 平均，建議傳入 >=2*p 根數據
+function calcRSI(arr, p) {
+  if (arr.length < p + 1) return 50;
+
+  // Step 1：計算每根漲跌幅
+  const changes = [];
+  for (let i = 1; i < arr.length; i++) {
+    changes.push(arr[i] - arr[i - 1]);
+  }
+
+  // Step 2：用前 p 根做簡單平均，作為 Wilder 首個 avgGain / avgLoss
+  let avgGain = 0, avgLoss = 0;
+  for (let i = 0; i < p; i++) {
+    if (changes[i] > 0) avgGain += changes[i];
+    else                avgLoss -= changes[i];
+  }
+  avgGain /= p;
+  avgLoss /= p;
+
+  // Step 3：對剩餘數據做 Wilder Smoothing（EMA with α = 1/p）
+  for (let i = p; i < changes.length; i++) {
+    const g = changes[i] > 0 ? changes[i] : 0;
+    const l = changes[i] < 0 ? -changes[i] : 0;
+    avgGain = (avgGain * (p - 1) + g) / p;
+    avgLoss = (avgLoss * (p - 1) + l) / p;
+  }
+
+  if (avgLoss === 0) return 100;
+  const rs = avgGain / avgLoss;
+  return 100 - 100 / (1 + rs);
+}
+
+// EMA — 支援 warm-up（前 warmup 根做 SMA 初始化）
+// 若不傳 warmup，預設用 period 本身做 SMA 種子（標準做法）
+function calcEMA(arr, p, warmup) {
+  const seed = warmup || p;
+  if (arr.length < seed) return arr[arr.length - 1] || 0;
+  const k = 2 / (p + 1);
+  // 用前 seed 根的 SMA 作為第一個 EMA 值（消除冷啟動偏差）
+  let e = arr.slice(0, seed).reduce((a, b) => a + b, 0) / seed;
+  for (let i = seed; i < arr.length; i++) e = arr[i] * k + e * (1 - k);
+  return e;
+}
+
+// MACD — 返回當前值與前一根值（用於判斷金叉/死叉）
+function calcMACD(arr) {
+  if (arr.length < 35) return { macd: 0, cross: 0 };  // 26+9 最少需 35 根
+  const m  = calcEMA(arr,          12) - calcEMA(arr,          26);
+  const mp = calcEMA(arr.slice(0, -1), 12) - calcEMA(arr.slice(0, -1), 26);
+  return { macd: m, cross: m > mp ? 1 : -1 };
+}
+
+function calcBB(arr, p, mult) {
+  if (arr.length < p) return { pos: 0.5 };
+  const sl   = arr.slice(-p);
+  const mean = sl.reduce((a,b)=>a+b,0)/p;
+  const std  = Math.sqrt(sl.reduce((a,b)=>a+(b-mean)**2,0)/p);
+  if (std === 0) return { pos: 0.5 };
+  return { pos: Math.max(0, Math.min(1, (arr[arr.length-1] - (mean-mult*std)) / (2*mult*std))) };
+}
+
+function calcEMATrend(arr) {
+  if (arr.length < 21) return 'neutral';
+  // 兩個 EMA 都用完整數據，確保 warm-up 充足
+  const e9  = calcEMA(arr, 9);
+  const e21 = calcEMA(arr, 21);
+  return e9 > e21 * 1.0005 ? 'up' : e9 < e21 * 0.9995 ? 'down' : 'neutral';
+}
+
+function calcVol() {
+  if (klines.length < 20) return { ratio: 1, surge: false, weak: false, label: '--' };
+  const vols  = klines.map(k => k.v);
+  const avg   = vols.slice(-21,-1).reduce((a,b)=>a+b,0) / 20;
+  const cur   = vols[vols.length-1];
+  const ratio = avg > 0 ? cur/avg : 1;
+  return { ratio, surge: ratio > 1.5, weak: ratio < 0.6, label: ratio.toFixed(2) + 'x' };
+}
+
+// ══════════════════════════════════════
+//  訊號評分（平衡型，每日約1-2次）
+// ══════════════════════════════════════
+function analyze(chg24) {
+  if (klines.length < 30) return;
+  const c   = closes();
+  const rsi = calcRSI(c, 14);
+  const mac = calcMACD(c);
+  const bb  = calcBB(c, 20, 2);
+  const ema = calcEMATrend(c);
+  const vol = calcVol();
+
+  updateInds(rsi, mac, bb, ema, vol);
+
+  if (mode === 'holding') {
+    // 持倉模式：監察止損 + 跳動通知（無止盈目標）
+    const isSL = btcUSD <= slUSD;
+    const qty  = POS_USD / entryUSD;
+    const pnl  = (btcUSD - entryUSD) * qty;
+    const pnlStr = (pnl >= 0 ? '+' : '') + 'USD ' + pnl.toFixed(2);
+
+    if (isSL) {
+      setSig('sig-sell','dot-s','t-sell', '止損觸發 — ' + fmtUSD(btcUSD), '', '價格跌破止損位 ' + fmtUSD(slUSD) + '\n立即執行止蝕！');
+      updatePreview('止蝕賣出 BTC\n' + fmtUSD(btcUSD) + '\n跌破止損位 ' + pnlStr);
+      if (autoOn) {
+        addLog('止損觸發！自動發送 Telegram...');
+        tgSend('🔴 止蝕賣出 BTC\n' + fmtUSD(btcUSD) + '\n跌破止損位 ' + pnlStr);
+        exitPosition('止蝕賣出');
+      }
+    } else {
+      setSig('sig-hold','dot-h','t-hold', '持倉監察中 — ' + fmtUSD(btcUSD), '',
+        '買入：' + fmtUSD(entryUSD) + '  現價：' + fmtUSD(btcUSD) +
+        '\n止損：' + fmtUSD(slUSD) +
+        '\n當前盈虧：' + pnlStr);
+      updatePreview('持倉監察中\n現價 ' + fmtUSD(btcUSD));
+    }
+    return;
+  }
+
+  // ═══════════════════════════════════════════════════════
+  //  【市場環境三重過濾】— 任一觸發 → 直接觀望，不評分
+  //  修改 v2.4：避免在惡劣環境中逆勢抄底
+  // ═══════════════════════════════════════════════════════
+
+  // 過濾一：15m 大趨勢向下 → 完全禁止買入訊號（舊版只減分，仍會觸發）
+  if (trend15m === 'down') {
+    setSig('sig-wait','dot-w','t-wait', '觀望中 — 15m下降趨勢', '',
+      '🚫 15m 大趨勢向下，禁止買入\nEMA9 < EMA21，等待趨勢轉向後再入市');
+    updatePreview('觀望中（禁止）\n15m大趨勢向下');
+    addLog('市場過濾：15m向下，跳過評分');
+    return;
+  }
+
+  // 過濾二：現價跌破過去 60 根（1小時）最低點附近 → 下跌通道，不抄底
+  const low1h  = Math.min(...klines.slice(-60).map(k => k.l));
+  const high1h = Math.max(...klines.slice(-60).map(k => k.h));
+  const range1h = high1h - low1h;
+  const pricePos1h = range1h > 0 ? (btcUSD - low1h) / range1h : 0.5; // 0=底部 1=頂部
+  if (pricePos1h < 0.15) {  // 現價在 1h 區間最低 15% → 持續下跌，不入市
+    setSig('sig-wait','dot-w','t-wait', '觀望中 — 下跌通道', '',
+      '🚫 現價位於 1h 最低區間（' + (pricePos1h * 100).toFixed(0) + '%）\n' +
+      '1h 低點：' + fmtUSD(low1h) + '  高點：' + fmtUSD(high1h) + '\n等待價格企穩反彈後再考慮入市');
+    updatePreview('觀望中（禁止）\n下跌通道底部');
+    addLog('市場過濾：現價在1h低點區間，跳過評分');
+    return;
+  }
+
+  // 過濾三：ATR 過低 → 波動太小，手續費難覆蓋，不入市
+  if (atrValue > 0 && atrValue < ATR_MIN) {
+    setSig('sig-wait','dot-w','t-wait', '觀望中 — 波動過低', '',
+      '🚫 ATR(' + atrValue.toFixed(0) + ') < 門檻(' + ATR_MIN + ')\n' +
+      '波動太小，手續費（USD 6）難以覆蓋，等待波動率回升');
+    updatePreview('觀望中（禁止）\nATR波動過低');
+    addLog('市場過濾：ATR ' + atrValue.toFixed(0) + ' < ' + ATR_MIN + '，跳過評分');
+    return;
+  }
+
+  // ── 通過所有過濾，進入評分 ──────────────────────────
+  let signalType = 'dip';
+
+  // ═══════════════════════════════════════
+  //  【1】強勢突破偵測（優先）
+  // ═══════════════════════════════════════
+  const isBreakout = vol.ratio > 2.0 && bb.pos > 1.05 && rsi > 58 && ema === 'up';
+
+  if (isBreakout) {
+    score      = 4.5;
+    signalType = 'breakout';
+    reasons    = [
+      '巨量突破（' + vol.label + '）',
+      '強破布林上軌（' + (bb.pos * 100).toFixed(0) + '%）',
+      'RSI強勢（' + rsi.toFixed(1) + '）',
+      'EMA趨勢向上'
+    ];
+  } else {
+    // ═══════════════════════════════════════
+    //  【2】底部回調抄底
+    // ═══════════════════════════════════════
+    if      (rsi < 35) { score += 3;   reasons.push('RSI嚴重超賣(' + rsi.toFixed(1) + ')'); }
+    else if (rsi < 48) { score += 1.5; reasons.push('RSI偏低(' + rsi.toFixed(1) + ')'); }
+    else if (rsi > 70) { score -= 3; }
+    else if (rsi > 60) { score -= 1; }
+
+    if (mac.cross > 0) {
+      score += 2;
+      if (mac.macd < 0) { score += 0.5; reasons.push('MACD低位黃金交叉（零軸以下）'); }
+      else              { reasons.push('MACD黃金交叉'); }
+    } else if (mac.cross < 0 && mac.macd < 0) { score -= 2; }
+
+    if      (bb.pos < 0.1)  { score += 2; reasons.push('觸及布林下軌'); }
+    else if (bb.pos < 0.25) { score += 2; reasons.push('接近布林下軌'); }
+    else if (bb.pos > 0.9)  { score -= 2; }
+    else if (bb.pos > 0.8)  { score -= 1; }
+
+    if      (ema === 'up')   { score += 1;   reasons.push('EMA趨勢向上'); }
+    else if (ema === 'down') { score -= 0.5; reasons.push('EMA下降趨勢'); }
+
+    if      (vol.surge) { score += 2; reasons.push('放量確認(' + vol.label + ')'); }
+    else if (vol.weak)  { score -= 1; reasons.push('縮量警告(' + vol.label + ')'); }
+
+    if (chg24 < -3) { score += 1; reasons.push('短期超跌'); }
+    if (chg24 >  4) { score -= 1; }
+  }
+
+  // ═══════════════════════════════════════
+  //  【3】15分鐘大趨勢確認（已通過過濾，此處為加分）
+  // ═══════════════════════════════════════
+  let trend15mWarn = '';
+  if (trend15m === 'up') {
+    score += 1;  // 順勢額外加分
+    reasons.push('15m大趨勢向上✓');
+  } else {
+    // neutral：不加分不減分（down 已在過濾層攔截，不會到達這裡）
+    trend15mWarn = '';
+  }
+
+  const conf = Math.max(40, Math.min(Math.round(score / 8.5 * 55 + 40), 95));
+
+  if (score >= 2) {
+    // ATR動態止損
+    const dynSL  = atrValue > 0 ? btcUSD - atrValue * 1.5 : btcUSD - SL_USD / (POS_USD / btcUSD);
+    const slLabel = atrValue > 0
+      ? fmtUSD(dynSL) + '（ATR×1.5 = USD ' + (atrValue * 1.5).toFixed(0) + '）'
+      : fmtUSD(dynSL) + '（固定 -USD ' + SL_USD + '）';
+    const rStr = reasons.join('、') || '多指標確認';
+
+    if (signalType === 'breakout') {
+      const tip = '當利潤達 +300 USD 時，建議手動將止損移至買入價以鎖定風險';
+      setSig('sig-breakout','dot-breakout','t-breakout',
+        '🚀 強勢突破訊號 — BTC ' + fmtUSD(btcUSD), '信心度 ' + conf + '%',
+        (trend15mWarn ? trend15mWarn + '\n' : '') +
+        '類型：強勢突破買入 (Breakout)\n指標：' + rStr +
+        '\nATR止損：' + slLabel + '\n\n⚠️ ' + tip
+      );
+      updatePreview('🚀 強勢突破訊號 BTC\n' + fmtUSD(btcUSD) + '\n信心度 ' + conf + '%\n' + rStr + '\nATR止損：' + slLabel);
+      // 雙重守衛：① 必須空倉 ② 5分鐘冷卻防重複
+      const now = Date.now();
+      if (autoOn && mode === 'empty' && (now - lastSignalSentAt) > SIGNAL_COOLDOWN) {
+        lastSignalSentAt = now;
+        addLog('🚀 強勢突破！信心度 ' + conf + '%，發送 Telegram...');
+        tgSend('🚀 強勢突破訊號 BTC\n現價：' + fmtUSD(btcUSD) + '\n類型：Breakout\n信心度：' + conf + '%\n指標：' + rStr + '\nATR止損：' + slLabel + (trend15mWarn ? '\n' + trend15mWarn : '') + '\n\n⚠️ ' + tip + '\n\n快速指令：/buy ' + btcUSD.toFixed(0) + ' ' + dynSL.toFixed(0));
+      } else if (mode === 'holding') {
+        addLog('🚀 突破訊號（已持倉，不通知）');
+      } else if ((now - lastSignalSentAt) <= SIGNAL_COOLDOWN) {
+        addLog('🚀 突破訊號（冷卻中，不重複發送）');
+      }
+    } else {
+      setSig('sig-buy','dot-b','t-buy',
+        '📉 底部回調訊號 — BTC ' + fmtUSD(btcUSD), '信心度 ' + conf + '%',
+        (trend15mWarn ? trend15mWarn + '\n' : '') +
+        '類型：底部回調買入 (Dip Buying)\n指標：' + rStr +
+        '\nATR止損：' + slLabel
+      );
+      updatePreview('📉 底部回調訊號 BTC\n' + fmtUSD(btcUSD) + '\n信心度 ' + conf + '%\n' + rStr + '\nATR止損：' + slLabel);
+      // 雙重守衛：① 必須空倉 ② 5分鐘冷卻防重複
+      const now = Date.now();
+      if (autoOn && mode === 'empty' && (now - lastSignalSentAt) > SIGNAL_COOLDOWN) {
+        lastSignalSentAt = now;
+        addLog('📉 底部回調！信心度 ' + conf + '%，發送 Telegram...');
+        tgSend('📉 底部回調訊號 BTC\n現價：' + fmtUSD(btcUSD) + '\n類型：Dip Buying\n信心度：' + conf + '%\n指標：' + rStr + '\nATR止損：' + slLabel + (trend15mWarn ? '\n' + trend15mWarn : '') + '\n\n快速指令：/buy ' + btcUSD.toFixed(0) + ' ' + dynSL.toFixed(0));
+      } else if (mode === 'holding') {
+        addLog('📉 回調訊號（已持倉，不通知）');
+      } else if ((now - lastSignalSentAt) <= SIGNAL_COOLDOWN) {
+        addLog('📉 回調訊號（冷卻中，不重複發送）');
+      }
+    }
+  } else {
+    setSig('sig-wait','dot-w','t-wait', '觀望中（空倉）— BTC ' + fmtUSD(btcUSD), '',
+      '等待訊號（抄底需2分以上 / 突破需巨量+破上軌）' +
+      (trend15mWarn ? '\n' + trend15mWarn : '') +
+      (reasons.length ? '\n留意：' + reasons.join('、') : ''));
+    updatePreview('觀望中\n現價 ' + fmtUSD(btcUSD));
+  }
+}
+
+function setSig(box, dot, act, actTxt, conf, detail) {
+  document.getElementById('sig-box').className   = 'sig ' + box;
+  document.getElementById('sig-dot').className   = 'dot ' + dot;
+  const a = document.getElementById('sig-act');
+  a.className   = 'sig-act ' + act;
+  a.textContent = actTxt;
+  document.getElementById('sig-conf').textContent   = conf;
+  document.getElementById('sig-detail').textContent = detail;
+}
+
+function updatePreview(txt) {
+  document.getElementById('tg-preview').textContent = txt;
+}
+
+// ══════════════════════════════════════
+//  指標 UI 更新
+// ══════════════════════════════════════
+function updateInds(rsi, mac, bb, ema, vol) {
+  const rv = document.getElementById('i-rsi');
+  rv.textContent = rsi.toFixed(1);
+  rv.style.color = rsi > 70 ? '#ef4444' : rsi < 35 ? '#22c55e' : rsi < 48 ? '#4ade80' : '#e0e0e0';
+  document.getElementById('i-rsi-b').style.width      = Math.min(rsi, 100) + '%';
+  document.getElementById('i-rsi-b').style.background = rsi > 70 ? '#ef4444' : rsi < 35 ? '#22c55e' : rsi < 48 ? '#4ade80' : '#444';
+  document.getElementById('i-rsi-n').textContent       = rsi > 70 ? '超買區域' : rsi < 35 ? '嚴重超賣' : rsi < 48 ? '偏低抄底區' : '中性區域';
+
+  const mv = document.getElementById('i-macd');
+  mv.textContent = mac.macd > 0 ? '看漲' : '看跌';
+  mv.style.color = mac.macd > 0 ? '#22c55e' : '#ef4444';
+  document.getElementById('i-macd-b').style.background = mac.cross > 0 ? '#22c55e' : '#ef4444';
+  document.getElementById('i-macd-n').textContent       = mac.cross > 0 ? '黃金交叉' : '死亡交叉';
+
+  const bpct = Math.round(bb.pos * 100);
+  const bv   = document.getElementById('i-bb');
+  bv.textContent = bpct + '%';
+  bv.style.color = bb.pos > 0.8 ? '#ef4444' : bb.pos < 0.2 ? '#22c55e' : '#e0e0e0';
+  document.getElementById('i-bb-b').style.width      = Math.min(Math.max(bpct,2),98) + '%';
+  document.getElementById('i-bb-b').style.background = bb.pos > 0.8 ? '#ef4444' : bb.pos < 0.2 ? '#22c55e' : '#444';
+  document.getElementById('i-bb-n').textContent       = bb.pos > 0.8 ? '接近/突破上軌' : bb.pos < 0.2 ? '接近/突破下軌' : '布林帶中間區';
+
+  const emaEl = document.getElementById('i-ema');
+  emaEl.textContent = ema === 'up' ? 'EMA9 > EMA21  上升趨勢' : ema === 'down' ? 'EMA9 < EMA21  下降趨勢' : 'EMA9 ≈ EMA21  中性';
+  emaEl.style.color = ema === 'up' ? '#22c55e' : ema === 'down' ? '#ef4444' : '#666';
+
+  const volEl  = document.getElementById('i-vol');
+  const volNte = document.getElementById('i-vol-n');
+  volEl.textContent = vol.label + ' 均量';
+  volEl.style.color = vol.surge ? '#22c55e' : vol.weak ? '#ef4444' : '#888';
+  volNte.textContent = vol.surge ? '放量：訊號更可靠' : vol.weak ? '縮量：訊號較弱' : '成交量正常';
+}
+
+// ══════════════════════════════════════
+//  圖表
+// ══════════════════════════════════════
+function updateChart() {
+  // klines 有 200 根（warm-up 用），圖表只顯示最後 60 根
+  const display = klines.slice(-60);
+  const labels = display.map(k => {
+    const d = new Date(k.t);
+    return d.getHours() + ':' + String(d.getMinutes()).padStart(2,'0');
+  });
+  const data = display.map(k => parseFloat(k.c.toFixed(2)));
+  if (!myChart) {
+    const ctx = document.getElementById('priceChart').getContext('2d');
+    myChart = new Chart(ctx, {
+      type: 'line',
+      data: { labels, datasets: [{ data, borderColor:'#22c55e', backgroundColor:'rgba(34,197,94,0.05)', borderWidth:1.5, pointRadius:2, pointBackgroundColor:'#22c55e', fill:true, tension:0.2 }] },
+      options: { responsive:true, animation:false, plugins:{legend:{display:false}},
+        scales: { x:{ticks:{font:{size:10},color:'#333',maxTicksLimit:10},grid:{color:'rgba(255,255,255,0.03)'}},
+                  y:{ticks:{font:{size:11},color:'#444',callback:v=>'$'+v.toLocaleString()},grid:{color:'rgba(255,255,255,0.04)'}} } }
+    });
+  } else {
+    myChart.data.labels = labels;
+    myChart.data.datasets[0].data = data;
+    myChart.update('none');
+  }
+}
+
+// ══════════════════════════════════════
+//  Telegram 發送
+// ══════════════════════════════════════
+async function tgSend(msg) {
+  const token  = document.getElementById('tg-token').value.trim();
+  const chatId = document.getElementById('tg-chatid').value.trim();
+  const st     = document.getElementById('tg-status');
+  if (!token || !chatId) { st.textContent='請先填入 Token 及 Chat ID'; st.className='status err'; return false; }
+  try {
+    const res  = await fetch('https://api.telegram.org/bot' + token + '/sendMessage', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ chat_id: chatId, text: msg })
+    });
+    const d = await res.json();
+    if (d.ok) {
+      addLog('Telegram 已發送：' + msg.split('\n')[0]);
+      st.textContent='發送成功！'; st.className='status ok';
+      return true;
+    } else {
+      addLog('發送失敗：' + d.description);
+      st.textContent='失敗：' + d.description; st.className='status err';
+      return false;
+    }
+  } catch(e) {
+    addLog('發送錯誤：' + e.message);
+    st.textContent='錯誤：' + e.message; st.className='status err';
+    return false;
+  }
+}
+
+function testTG() {
+  tgSend('🤖 BTC Bot 測試通知\n現價 ' + fmtUSD(btcUSD) + '\n系統運作正常');
+}
+
+function toggleAuto() {
+  autoOn = !autoOn;
+  document.getElementById('auto-btn').className   = 'btn ' + (autoOn ? 'btn-ok' : '');
+  document.getElementById('auto-btn').textContent = '自動通知：' + (autoOn ? '開啟' : '關閉');
+  document.getElementById('auto-dot').className   = autoOn ? 'pulse' : 'pulse-off';
+  document.getElementById('auto-lbl').className   = autoOn ? 'auto-lbl' : 'auto-off';
+  document.getElementById('auto-lbl').textContent = autoOn ? 'AI 監察中 · 空倉找買入 · 持倉監察跳動+止損' : '自動通知已關閉';
+  addLog('自動通知已' + (autoOn ? '開啟' : '關閉'));
+}
+
+// ══════════════════════════════════════
+//  Telegram 指令控制
+// ══════════════════════════════════════
+async function runCmd(cmd) {
+  addLog('發送指令：' + cmd);
+  document.getElementById('cmd-reply').textContent = '發送中...';
+  document.getElementById('cmd-status').textContent = '';
+
+  const token  = document.getElementById('tg-token').value.trim();
+  const chatId = document.getElementById('tg-chatid').value.trim();
+  if (!token || !chatId) {
+    document.getElementById('cmd-status').textContent = '請先填入 Token 及 Chat ID';
+    document.getElementById('cmd-status').className   = 'status err';
+    return;
+  }
+
+  // 在 HTML 本地執行指令邏輯
+  const reply = await execCmd(cmd);
+  document.getElementById('cmd-reply').textContent = reply;
+  addLog('指令回覆：' + reply.split('\n')[0]);
+
+  // 同時發送到 Telegram
+  await tgSend(reply);
+}
+
+async function execCmd(text) {
+  const parts = text.trim().split(/\s+/);
+  const cmd   = parts[0].toLowerCase();
+
+  if (cmd === '/price') {
+    return '💰 BTC 現價\n' + fmtUSD(btcUSD);
+  }
+
+  if (cmd === '/status') {
+    if (mode === 'holding') {
+      const qty2   = POS_USD / entryUSD;
+      const pnl    = (btcUSD - entryUSD) * qty2;
+      const pnlPct = (pnl / POS_USD * 100).toFixed(2);
+      return '📊 持倉狀態\n\n買入價：' + fmtUSD(entryUSD) + '\n現　價：' + fmtUSD(btcUSD) + '\n止損價：' + fmtUSD(slUSD) + '\n盈　虧：' + (pnl>=0?'+':'') + 'USD ' + pnl.toFixed(2) + ' (' + (pnl>=0?'+':'') + pnlPct + '%)\n入市時間：' + entryTime;
+    }
+    return '📭 目前空倉中，等待買入訊號';
+  }
+
+  if (cmd === '/summary') {
+    const c   = closes();
+    if (!c.length) return '❌ 數據載入中...';
+    const rsi = calcRSI(c, 14);
+    const mac = calcMACD(c);
+    const ema = calcEMATrend(c);
+    const vol = calcVol();
+    const high24 = Math.max(...klines.map(k=>k.h));
+    const low24  = Math.min(...klines.map(k=>k.l));
+    const chg    = (btcUSD - klines[0].o) / klines[0].o * 100;
+    const modeStr = mode === 'holding' ? '持倉中（買入 ' + fmtUSD(entryUSD) + '）' : '空倉中';
+    return '📊 BTC 市況摘要\n\n現價：' + fmtUSD(btcUSD) + '\n高位：' + fmtUSD(high24) + '\n低位：' + fmtUSD(low24) + '\n變動：' + (chg>=0?'+':'') + chg.toFixed(2) + '%\n\nRSI：' + rsi.toFixed(1) + '\nMACD：' + (mac.macd>0?'看漲':'看跌') + ' / ' + (mac.cross>0?'黃金交叉':'死亡交叉') + '\nEMA：' + (ema==='up'?'上升趨勢':ema==='down'?'下降趨勢':'中性') + '\n成交量：' + vol.label + ' 均量\n\n持倉：' + modeStr;
+  }
+
+  if (cmd === '/buy') {
+    if (mode === 'holding') return '⚠️ 已在持倉中，請先 /sell 或 /cancel';
+    try {
+      let entry = btcUSD, tp = 0, sl = 0, note = '（以現價自動計算）';
+      if (parts.length === 2) {
+        entry = parseFloat(parts[1]); note = '（指定買入價，止盈止損自動計算）';
+      } else if (parts.length === 4) {
+        entry = parseFloat(parts[1]); tp = parseFloat(parts[2]); sl = parseFloat(parts[3]); note = '（全部手動設定）';
+      }
+      if (sl > 0 && sl >= entry) return '❌ 止損價必須低於買入價';
+      enterPosition(entry, tp, sl);
+      const qty3   = POS_USD / entryUSD;
+      const slLoss = ((slUSD - entryUSD) * qty3).toFixed(2);
+      const jumpThreshCmd = atrValue > 0 ? 'ATR×' + JUMP_ATR_LOW + ' ≈ USD ' + (atrValue * JUMP_ATR_LOW).toFixed(0) : 'USD ' + JUMP_FALLBACK_LOW;
+      return '✅ 已確認買入\n\n買入價：' + fmtUSD(entryUSD) + '\n止損價：' + fmtUSD(slUSD) + '（USD ' + slLoss + '）\n跳動閾值 ' + jumpThreshCmd + ' 時通知賣出\n' + note;
+    } catch(e) { return '❌ 格式錯誤\n用法：/buy\n或 /buy 83500\n或 /buy 83500 85000 82500'; }
+  }
+
+  if (cmd === '/sell') {
+    if (mode === 'empty') return '⚠️ 目前沒有持倉';
+    const qty4   = POS_USD / entryUSD;
+    const pnl    = (btcUSD - entryUSD) * qty4;
+    const isStop = btcUSD <= slUSD;
+    const action = isStop ? '止蝕賣出' : '賣出';
+    exitPosition(action);
+    return (pnl < 0 ? '🔴 ' : '✅ ') + action + ' BTC（手動）\n\n買入價：' + fmtUSD(entryUSD) + '\n賣出價：' + fmtUSD(btcUSD) + '\n盈　虧：' + (pnl>=0?'+':'') + 'USD ' + pnl.toFixed(2);
+  }
+
+  if (cmd === '/cancel') {
+    if (mode === 'empty') return '目前已是空倉狀態';
+    exitPosition('手動取消');
+    return '🔄 已重設為空倉，Bot 將重新尋找買入訊號';
+  }
+
+  if (cmd === '/help') {
+    return '🤖 BTC Bot 指令列表\n\n/price — BTC 即時價格\n/status — 持倉狀態及盈虧\n/summary — 完整市況摘要\n/buy — 以現價確認買入\n/buy 83500 — 指定買入價\n/buy 83500 85000 82500 — 買入 止盈 止損\n/sell — 確認賣出平倉\n/cancel — 取消持倉重設\n/help — 顯示此列表';
+  }
+
+  return '❓ 未知指令：' + cmd + '\n輸入 /help 查看所有指令';
+}
+
+function runBuyCmd() {
+  const e = document.getElementById('cmd-entry').value.trim();
+  const t = document.getElementById('cmd-tp').value.trim();
+  const s = document.getElementById('cmd-sl').value.trim();
+  let cmd = '/buy';
+  if (e && t && s) cmd = '/buy ' + e + ' ' + t + ' ' + s;
+  else if (e)       cmd = '/buy ' + e;
+  const hint = document.getElementById('cmd-buy-hint');
+  hint.textContent = '執行中：' + cmd;
+  hint.style.color = '#60a5fa';
+  runCmd(cmd);
+}
+
+function clearCmdInputs() {
+  ['cmd-entry','cmd-tp','cmd-sl'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('cmd-buy-hint').textContent = '填入價格或留空用現價';
+  document.getElementById('cmd-buy-hint').style.color = '#444';
+}
+
+// ══════════════════════════════════════
+//  Telegram 輪詢（收取回覆）
+// ══════════════════════════════════════
+async function pollNow() {
+  const token  = document.getElementById('tg-token').value.trim();
+  const chatId = document.getElementById('tg-chatid').value.trim();
+  if (!token || !chatId) return;
+  try {
+    const url = 'https://api.telegram.org/bot' + token + '/getUpdates?offset=' + (lastUpdateId + 1) + '&limit=10&timeout=3';
+    const res  = await fetch(url);
+    const data = await res.json();
+    if (!data.ok) return;
+    for (const upd of data.result || []) {
+      lastUpdateId = upd.update_id;
+      const msg  = upd.message || {};
+      const text = msg.text || '';
+      const from = String(msg.chat?.id || '');
+      if (from !== chatId) continue;
+      if (text.startsWith('/')) {
+        addLog('收到 Telegram 指令：' + text);
+        const reply = await execCmd(text);
+        document.getElementById('cmd-reply').textContent = reply;
+        await tgSend(reply);
+      }
+    }
+    document.getElementById('poll-status').textContent = '上次收取：' + new Date().toLocaleTimeString('zh-HK');
+  } catch(e) {
+    addLog('輪詢錯誤：' + e.message);
+  }
+}
+
+function doRefresh() { addLog('手動刷新...'); fetchKlines(); }
+
+// ══════════════════════════════════════
+//  啟動
+// ══════════════════════════════════════
+function resetJumpBase() {
+  if (mode !== 'holding') { addLog('空倉中，無需重設'); return; }
+  jumpBasePrice  = entryUSD;  // 永遠重設回買入價
+  jumpNotified   = false;
+  jumpNotifiedAt = 0;         // 同時清除冷卻，允許立即通知
+  const lbl = document.getElementById('jump-base-lbl');
+  if (lbl) lbl.textContent = '買入價：' + fmtUSD(jumpBasePrice) + '（已重設）';
+  const jumpEl = document.getElementById('jump-display');
+  if (jumpEl) { jumpEl.textContent = 'USD 0（重設）'; jumpEl.style.color = '#555'; }
+  const box = document.getElementById('jump-box');
+  if (box) { box.style.borderColor = '#1e3a5f'; box.style.background = '#0a1525'; }
+  addLog('跳動基準重設回買入價 ' + fmtUSD(entryUSD));
+}
+
+loadState();                                // 從 localStorage 恢復狀態
+fetchTicker();                              // 立即取得即時價格
+fetchKlines();                              // 載入1分鐘K線
+fetch15mKlines();                           // 載入15分鐘大趨勢
+setInterval(fetchTicker,    15 * 1000);     // 每15秒：即時價格/跳動/止損
+setInterval(fetchKlines,    60 * 1000);     // 每60秒：1m K線 + 訊號分析
+setInterval(fetch15mKlines, 5 * 60 * 1000);// 每5分鐘：15m大趨勢
+setInterval(pollNow,        30 * 1000);     // 每30秒：Telegram 指令
+addLog('系統啟動 v2.4 · 三重市場過濾（15m禁止/1h低點/ATR<50）· Wilder RSI · EMA Warm-up · 買入冷卻5min · 跳動 ATR×3.0');
+</script>
+</div><!-- /app-content -->
+</body>
+</html>
